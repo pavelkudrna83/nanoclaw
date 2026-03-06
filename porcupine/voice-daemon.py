@@ -177,7 +177,7 @@ def main():
         sys.exit(1)
 
     settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
-    clipboard_keyword = settings.get("clipboard_keyword", "schránka").lower()
+    agent_keyword = settings.get("agent_keyword", "audio").lower()
     session_keyword = settings.get("session_keyword", "nová session").lower()
     group_folder = settings.get("group_folder", "telegram_main")
     voice_log = VoiceSessionLog(group_folder)
@@ -199,7 +199,7 @@ def main():
 
     print(f"Voice daemon started. Say 'Hey Gimme' to start/stop recording.")
     print(f"Chat: {CHAT_JID}")
-    print(f"Clipboard keyword: {clipboard_keyword}")
+    print(f"Agent keyword: {agent_keyword}")
     print(f"Press Ctrl+C to quit.\n")
 
     recorder.start()
@@ -258,18 +258,19 @@ def main():
                         voice_log.new_session()
                         play_sound(SOUND_CLIPBOARD)
                         print(f"  New voice session started.\n")
-                    elif cleaned_lower.startswith(clipboard_keyword):
-                        clipboard_text = clean_transcription(cleaned[len(clipboard_keyword):])
-                        if clipboard_text:
-                            copy_to_clipboard(clipboard_text)
-                            play_sound(SOUND_CLIPBOARD)
-                            print(f"  Copied to clipboard: {clipboard_text}\n")
+                    elif cleaned_lower.startswith(agent_keyword):
+                        agent_text = cleaned[len(agent_keyword):].strip()
+                        if agent_text:
+                            voice_log.log("Pavel", agent_text)
+                            inject_message(agent_text, CHAT_JID)
+                            print(f"  Injected into NanoClaw. Waiting for response...\n")
                         else:
-                            print("  Clipboard keyword detected but no text to copy.\n")
+                            print("  Agent keyword detected but no text to send.\n")
                     else:
-                        voice_log.log("Pavel", cleaned)
-                        inject_message(text, CHAT_JID)
-                        print(f"  Injected into NanoClaw. Waiting for response...\n")
+                        # Default: clipboard
+                        copy_to_clipboard(cleaned)
+                        play_sound(SOUND_CLIPBOARD)
+                        print(f"  Copied to clipboard: {cleaned}\n")
 
     except KeyboardInterrupt:
         print("\nStopping...")
