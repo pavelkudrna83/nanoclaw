@@ -6,6 +6,7 @@ First detection = start recording, second = stop recording + transcribe + inject
 """
 
 import io
+import json
 import os
 import sqlite3
 import struct
@@ -28,6 +29,8 @@ DB_PATH = str(PROJECT_ROOT / "store" / "messages.db")
 CHAT_JID = "tg:8253215818"  # Telegram main chat
 SOUND_START = "/System/Library/Sounds/Purr.aiff"
 SOUND_STOP = "/System/Library/Sounds/Pop.aiff"
+SOUND_CLIPBOARD = "/System/Library/Sounds/Tink.aiff"
+SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 PLAYBACK_PID_FILE = os.path.join(tempfile.gettempdir(), "nanoclaw-playback.pid")
 
 
@@ -105,6 +108,50 @@ def inject_message(text, chat_jid):
     return now
 
 
+def clean_transcription(text):
+    """Strip leading/trailing punctuation and trailing wake word artifacts from transcription."""
+    import re
+    # Strip leading/trailing whitespace and punctuation
+    text = text.strip().strip(".,!?;:\"'")
+    # Remove trailing wake word variations (Heigimi, Hey Gimme, Hey gimme, etc.)
+    text = re.sub(r'\s*[,.]?\s*h[ea][ij]\s*[dg][iy]m+[iey]+[\s.,!?]*$', '', text, flags=re.IGNORECASE)
+    return text.strip().strip(".,!?;:\"'")
+
+
+def copy_to_clipboard(text):
+    """Copy text to macOS clipboard via pbcopy."""
+    subprocess.run(["pbcopy"], input=text.encode(), check=True)
+
+
+class VoiceSessionLog:
+    """Manages voice session markdown files in the group workspace."""
+
+    def __init__(self, group_folder):
+        self.sessions_dir = PROJECT_ROOT / "groups" / group_folder / "voice-sessions"
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.current_file = None
+        self._new_session()
+
+    def _new_session(self):
+        """Start a new session file."""
+        now = datetime.now()
+        filename = now.strftime("%Y-%m-%d_%H-%M") + ".md"
+        self.current_file = self.sessions_dir / filename
+        header = f"# Voice Session {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+        self.current_file.write_text(header)
+        print(f"  Voice session log: {self.current_file}")
+
+    def new_session(self):
+        """Public method to start a new session."""
+        self._new_session()
+
+    def log(self, sender, text):
+        """Append a message to the current session file."""
+        now = datetime.now().strftime("%H:%M")
+        with open(self.current_file, "a") as f:
+            f.write(f"**{sender}** ({now}): {text}\n\n")
+
+
 def frames_to_wav(frames, sample_rate):
     """Convert raw PCM frames to WAV bytes."""
     buf = io.BytesIO()
@@ -129,6 +176,12 @@ def main():
         print("ERROR: OPENAI_API_KEY not found in .env")
         sys.exit(1)
 
+    settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
+    clipboard_keyword = settings.get("clipboard_keyword", "schránka").lower()
+    session_keyword = settings.get("session_keyword", "nová session").lower()
+    group_folder = settings.get("group_folder", "telegram_main")
+    voice_log = VoiceSessionLog(group_folder)
+
     porcupine = pvporcupine.create(
         access_key=access_key,
         keyword_paths=[KEYWORD_PATH],
@@ -146,6 +199,7 @@ def main():
 
     print(f"Voice daemon started. Say 'Hey Gimme' to start/stop recording.")
     print(f"Chat: {CHAT_JID}")
+    print(f"Clipboard keyword: {clipboard_keyword}")
     print(f"Press Ctrl+C to quit.\n")
 
     recorder.start()
@@ -196,9 +250,26 @@ def main():
 
                     print(f"  Transcribed: {text}")
 
-                    # Inject into NanoClaw
-                    inject_message(text, CHAT_JID)
-                    print(f"  Injected into NanoClaw. Waiting for response...\n")
+                    # Route based on keyword
+                    cleaned = clean_transcription(text)
+                    cleaned_lower = cleaned.lower()
+
+                    if cleaned_lower.startswith(session_keyword):
+                        voice_log.new_session()
+                        play_sound(SOUND_CLIPBOARD)
+                        print(f"  New voice session started.\n")
+                    elif cleaned_lower.startswith(clipboard_keyword):
+                        clipboard_text = clean_transcription(cleaned[len(clipboard_keyword):])
+                        if clipboard_text:
+                            copy_to_clipboard(clipboard_text)
+                            play_sound(SOUND_CLIPBOARD)
+                            print(f"  Copied to clipboard: {clipboard_text}\n")
+                        else:
+                            print("  Clipboard keyword detected but no text to copy.\n")
+                    else:
+                        voice_log.log("Pavel", cleaned)
+                        inject_message(text, CHAT_JID)
+                        print(f"  Injected into NanoClaw. Waiting for response...\n")
 
     except KeyboardInterrupt:
         print("\nStopping...")

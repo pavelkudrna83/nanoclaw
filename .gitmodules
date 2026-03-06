@@ -1,0 +1,3 @@
+[submodule "groups"]
+	path = groups
+	url = https://github.com/pavelkudrna83/nanoclaw-workspace.git
