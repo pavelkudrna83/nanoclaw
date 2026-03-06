@@ -30,6 +30,7 @@ CHAT_JID = "tg:8253215818"  # Telegram main chat
 SOUND_START = "/System/Library/Sounds/Purr.aiff"
 SOUND_STOP = "/System/Library/Sounds/Pop.aiff"
 SOUND_CLIPBOARD = "/System/Library/Sounds/Tink.aiff"
+SOUND_CANCEL = "/System/Library/Sounds/Basso.aiff"
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 PLAYBACK_PID_FILE = os.path.join(tempfile.gettempdir(), "nanoclaw-playback.pid")
 
@@ -114,7 +115,7 @@ def clean_transcription(text):
     # Strip leading/trailing whitespace and punctuation
     text = text.strip().strip(".,!?;:\"'")
     # Remove trailing wake word variations (Heigimi, Hey Gimme, Hey gimme, etc.)
-    text = re.sub(r'\s*[,.]?\s*h[ea][ij]\s*[dg][iy]m+[iey]+[\s.,!?]*$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*[,.]?\s*h[ea][ij]\s*[dg][iy]\s*m+[iey]+[\s.,!?]*$', '', text, flags=re.IGNORECASE)
     return text.strip().strip(".,!?;:\"'")
 
 
@@ -179,6 +180,7 @@ def main():
     settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
     agent_keyword = settings.get("agent_keyword", "audio").lower()
     session_keyword = settings.get("session_keyword", "nová session").lower()
+    cancel_keyword = settings.get("cancel_keyword", "zrušit").lower()
     group_folder = settings.get("group_folder", "telegram_main")
     voice_log = VoiceSessionLog(group_folder)
 
@@ -235,13 +237,26 @@ def main():
                         print("  Too short, skipping.")
                         continue
 
-                    # Transcribe
+                    # Transcribe with retry (30s timeout)
                     print("  Transcribing...")
                     wav_bytes = frames_to_wav(recorded_frames, sample_rate)
-                    try:
-                        text = transcribe(wav_bytes, openai_key)
-                    except Exception as e:
-                        print(f"  Transcription failed: {e}")
+                    text = None
+                    deadline = time.time() + 30
+                    while time.time() < deadline:
+                        try:
+                            text = transcribe(wav_bytes, openai_key)
+                            break
+                        except Exception as e:
+                            print(f"  Transcription failed: {e}")
+                            if time.time() + 5 < deadline:
+                                print("  Retrying in 5s...")
+                                time.sleep(5)
+                            else:
+                                break
+                    if not text:
+                        play_sound(SOUND_CANCEL)
+                        subprocess.Popen(["say", "-v", "Zuzana", "Přepis nedostupný"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        print("  Transcription unavailable after retries.\n")
                         continue
 
                     if not text:
@@ -253,6 +268,12 @@ def main():
                     # Route based on keyword
                     cleaned = clean_transcription(text)
                     cleaned_lower = cleaned.lower()
+
+                    # Cancel detection — last word before wake word
+                    if cleaned_lower.endswith(cancel_keyword):
+                        play_sound(SOUND_CANCEL)
+                        print(f"  Cancelled.\n")
+                        continue
 
                     if cleaned_lower.startswith(session_keyword):
                         voice_log.new_session()

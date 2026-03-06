@@ -1,5 +1,6 @@
 {
   "agent_keyword": "audio",
   "session_keyword": "nová session",
+  "cancel_keyword": "zrušit",
   "group_folder": "telegram_main"
 }
