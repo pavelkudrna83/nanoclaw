@@ -197,6 +197,24 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount network policy and MCP servers config (read-only)
+  const networkPolicyPath = path.join(projectRoot, 'network-policy.json');
+  if (fs.existsSync(networkPolicyPath)) {
+    mounts.push({
+      hostPath: networkPolicyPath,
+      containerPath: '/workspace/network-policy.json',
+      readonly: true,
+    });
+  }
+  const mcpServersPath = path.join(projectRoot, 'mcp-servers.json');
+  if (fs.existsSync(mcpServersPath)) {
+    mounts.push({
+      hostPath: mcpServersPath,
+      containerPath: '/workspace/mcp-servers.json',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -220,6 +238,7 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
+    'NANOCLAW_GATEWAY_TOKEN',
   ]);
 }
 
@@ -229,16 +248,19 @@ function buildContainerArgs(
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
+  // Grant NET_ADMIN capability for iptables-based network isolation
+  args.push('--cap-add=NET_ADMIN');
+
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
+  // Container starts as root for iptables setup, then drops privileges
+  // via gosu in entrypoint-network.sh. Pass the target user as env var
+  // so gosu can switch to the correct UID for bind-mount file ownership.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    args.push('-e', `NANOCLAW_RUN_AS=${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
