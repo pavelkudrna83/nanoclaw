@@ -199,6 +199,24 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount network policy and MCP servers config (read-only)
+  const networkPolicyPath = path.join(projectRoot, 'network-policy.json');
+  if (fs.existsSync(networkPolicyPath)) {
+    mounts.push({
+      hostPath: networkPolicyPath,
+      containerPath: '/workspace/network-policy.json',
+      readonly: true,
+    });
+  }
+  const mcpServersPath = path.join(projectRoot, 'mcp-servers.json');
+  if (fs.existsSync(mcpServersPath)) {
+    mounts.push({
+      hostPath: mcpServersPath,
+      containerPath: '/workspace/mcp-servers.json',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -217,6 +235,9 @@ function buildContainerArgs(
   containerName: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Grant NET_ADMIN capability for iptables-based network isolation
+  args.push('--cap-add=NET_ADMIN');
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
@@ -247,7 +268,7 @@ function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    args.push('-e', `NANOCLAW_RUN_AS=${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 

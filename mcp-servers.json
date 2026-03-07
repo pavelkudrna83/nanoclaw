@@ -1,0 +1,11 @@
+{
+  "nanoclaw-gateway": {
+    "type": "sse",
+    "url": "http://host.docker.internal:5520/mcp/sse",
+    "authEnvVar": "NANOCLAW_GATEWAY_TOKEN"
+  },
+  "ltag-server": {
+    "type": "sse",
+    "url": "http://host.docker.internal:5530/mcp/sse"
+  }
+}

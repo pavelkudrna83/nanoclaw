@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    iptables \
+    jq \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser
@@ -57,14 +60,19 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # Follow-up messages arrive via IPC files in /workspace/ipc/input/
 RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
+# Copy network isolation entrypoint wrapper
+COPY entrypoint-network.sh /app/entrypoint-network.sh
+RUN chmod +x /app/entrypoint-network.sh
+
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
 
-# Switch to non-root user (required for --dangerously-skip-permissions)
-USER node
+# Note: container starts as root for iptables setup in entrypoint-network.sh,
+# which then drops privileges to node user via su-exec/gosu before running the app.
 
 # Set working directory to group workspace
 WORKDIR /workspace/group
 
-# Entry point reads JSON from stdin, outputs JSON to stdout
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Entry point: network isolation wrapper → original entrypoint
+# entrypoint-network.sh runs as root (sets iptables), then exec's entrypoint.sh
+ENTRYPOINT ["/app/entrypoint-network.sh"]

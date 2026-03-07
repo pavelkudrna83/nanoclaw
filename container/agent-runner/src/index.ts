@@ -323,6 +323,67 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+const MCP_SERVERS_CONFIG_PATH = '/workspace/mcp-servers.json';
+
+interface McpServerConfig {
+  type: 'sse';
+  url: string;
+  authEnvVar?: string;
+}
+
+function loadMcpServersConfig(): Record<string, McpServerConfig> {
+  if (!fs.existsSync(MCP_SERVERS_CONFIG_PATH)) {
+    log(`No MCP servers config at ${MCP_SERVERS_CONFIG_PATH}`);
+    return {};
+  }
+  try {
+    const config = JSON.parse(fs.readFileSync(MCP_SERVERS_CONFIG_PATH, 'utf-8'));
+    log(`Loaded ${Object.keys(config).length} MCP server(s) from config`);
+    return config;
+  } catch (err) {
+    log(`Failed to load MCP servers config: ${err instanceof Error ? err.message : String(err)}`);
+    return {};
+  }
+}
+
+let _mcpServersConfigCache: Record<string, McpServerConfig> | undefined;
+
+function getMcpServersConfig(): Record<string, McpServerConfig> {
+  if (_mcpServersConfigCache === undefined) {
+    _mcpServersConfigCache = loadMcpServersConfig();
+  }
+  return _mcpServersConfigCache;
+}
+
+function loadMcpServerNames(): string[] {
+  return Object.keys(getMcpServersConfig());
+}
+
+function buildMcpServersFromConfig(
+  sdkEnv: Record<string, string | undefined>,
+): Record<string, { type: 'sse'; url: string; headers?: Record<string, string> }> {
+  const config = getMcpServersConfig();
+  const servers: Record<string, { type: 'sse'; url: string; headers?: Record<string, string> }> = {};
+
+  for (const [name, server] of Object.entries(config)) {
+    const entry: { type: 'sse'; url: string; headers?: Record<string, string> } = {
+      type: 'sse' as const,
+      url: server.url,
+    };
+    if (server.authEnvVar) {
+      const token = sdkEnv[server.authEnvVar] || '';
+      if (token) {
+        entry.headers = { Authorization: `Bearer ${token}` };
+      } else {
+        log(`WARNING: ${name} requires ${server.authEnvVar} but it is not set`);
+      }
+    }
+    servers[name] = entry;
+  }
+
+  return servers;
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -407,7 +468,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        ...loadMcpServerNames().map(name => `mcp__${name}__*`),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +485,7 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...buildMcpServersFromConfig(sdkEnv),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
