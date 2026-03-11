@@ -18,6 +18,8 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
+import re
+
 import pvporcupine
 from pvrecorder import PvRecorder
 
@@ -91,6 +93,8 @@ def transcribe(audio_bytes, openai_key):
         file=audio_file,
         model="whisper-1",
         response_format="text",
+        language="cs",
+        prompt="audio session, schránka, zrušit, nová session, Hey Gimme",
     )
     return transcript.strip()
 
@@ -109,13 +113,25 @@ def inject_message(text, chat_jid):
     return now
 
 
-def clean_transcription(text):
-    """Strip leading/trailing punctuation and trailing wake word artifacts from transcription."""
-    import re
-    # Strip leading/trailing whitespace and punctuation
+_WAKE_WORD_RE = re.compile(
+    r'\s*[,.]?\s*(?:h[ea][ij]\s*[dg][iy]\s*m+[iey]+|h[ea]j[iy]m[iey]+|g[iy]m+[iey]+|h[ea][iy])[\s.,!?]*$',
+    re.IGNORECASE
+)
+
+
+def strip_wake_words(text):
+    """Remove trailing wake word variations from text."""
     text = text.strip().strip(".,!?;:\"'")
-    # Remove trailing wake word variations (Heigimi, Hey Gimme, Hey gimme, etc.)
-    text = re.sub(r'\s*[,.]?\s*h[ea][ij]\s*[dg][iy]\s*m+[iey]+[\s.,!?]*$', '', text, flags=re.IGNORECASE)
+    for _ in range(2):
+        text = _WAKE_WORD_RE.sub('', text)
+    return text.strip().strip(".,!?;:\"'")
+
+
+def clean_transcription(text):
+    """Strip wake words, mode announcement leak, and punctuation from transcription."""
+    text = strip_wake_words(text)
+    # Remove leading mode announcement leaked from speaker into mic
+    text = re.sub(r'^(?:schránka|audio)\s*[,.]?\s*', '', text, flags=re.IGNORECASE)
     return text.strip().strip(".,!?;:\"'")
 
 
@@ -182,7 +198,15 @@ def main():
     session_keyword = settings.get("session_keyword", "nová session").lower()
     cancel_keyword = settings.get("cancel_keyword", "zrušit").lower()
     group_folder = settings.get("group_folder", "telegram_main")
+    mode_timeout_minutes = settings.get("mode_timeout_minutes", 10)
     voice_log = VoiceSessionLog(group_folder)
+
+    # Voice mode: "schránka" (clipboard, default) or "audio" (agent)
+    MODE_CLIPBOARD = "schránka"
+    MODE_AUDIO = "audio"
+    DEFAULT_MODE = MODE_CLIPBOARD
+    current_mode = DEFAULT_MODE
+    last_activity_time = time.time()
 
     porcupine = pvporcupine.create(
         access_key=access_key,
@@ -190,29 +214,112 @@ def main():
         sensitivities=[0.6],
     )
 
-    recorder = PvRecorder(
-        frame_length=porcupine.frame_length,
-        device_index=-1,  # default microphone
-    )
-
     sample_rate = porcupine.sample_rate
     recording = False
     recorded_frames = []
 
+    def get_audio_type():
+        """Return 'interní' or 'externí' based on current input/output devices."""
+        try:
+            mic_result = subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-t", "input", "-c"],
+                                 capture_output=True, text=True, timeout=5)
+            spk_result = subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-t", "output", "-c"],
+                                 capture_output=True, text=True, timeout=5)
+            mic = mic_result.stdout.strip().lower()
+            spk = spk_result.stdout.strip().lower()
+            if not mic and not spk:
+                print(f"  get_audio_type: empty (mic_rc={mic_result.returncode}, spk_rc={spk_result.returncode}, err={mic_result.stderr.strip()})")
+                return ""
+            is_builtin = "macbook" in mic and "macbook" in spk
+            result = "interní" if is_builtin else "externí"
+            print(f"  get_audio_type: {result} (mic={mic}, spk={spk})")
+            return result
+        except Exception as e:
+            print(f"  get_audio_type exception: {e}")
+            return ""
+
+    def say_and_beep(word):
+        """Say the mode name + audio type, wait for it to finish, then play the start beep."""
+        audio_type = get_audio_type()
+        announcement = f"{word}, {audio_type}" if audio_type else word
+        print(f"  say: [{announcement}]")
+        proc = subprocess.Popen(["say", "-v", "Zuzana", announcement], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        play_sound(SOUND_START)
+
+    MODE_LABELS = {
+        MODE_AUDIO: "audio session",
+        MODE_CLIPBOARD: "schránka",
+    }
+
+    def switch_mode(new_mode):
+        nonlocal current_mode
+        if current_mode != new_mode:
+            current_mode = new_mode
+            label = MODE_LABELS.get(new_mode, new_mode)
+            print(f"  Mode switched to: {label}")
+            subprocess.Popen(["say", "-v", "Zuzana", f"Nastavena {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            label = MODE_LABELS.get(new_mode, new_mode)
+            print(f"  Already in mode: {label}")
+            subprocess.Popen(["say", "-v", "Zuzana", f"Již {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Mode switch patterns — transcription contains just the mode switch command
+    # Whisper can transcribe "audio session" in many ways: "audio session", "audio sešn", etc.
+    mode_switch_patterns = {
+        MODE_AUDIO: re.compile(r'^audio[\s-]*se[sš]+[ieaí]?[oó]?n?$', re.IGNORECASE),
+        MODE_CLIPBOARD: re.compile(r'^schr[áa]nka$', re.IGNORECASE),
+    }
+
+    def create_recorder():
+        rec = PvRecorder(
+            frame_length=porcupine.frame_length,
+            device_index=-1,
+        )
+        rec.start()
+        return rec
+
     print(f"Voice daemon started. Say 'Hey Gimme' to start/stop recording.")
     print(f"Chat: {CHAT_JID}")
-    print(f"Agent keyword: {agent_keyword}")
+    print(f"Default mode: {DEFAULT_MODE}, timeout: {mode_timeout_minutes}min")
     print(f"Press Ctrl+C to quit.\n")
 
-    recorder.start()
+    recorder = create_recorder()
 
     try:
         while True:
-            frame = recorder.read()
+            try:
+                frame = recorder.read()
+            except OSError:
+                # Microphone disconnected — wait and try to reconnect
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone lost. Waiting for reconnect...")
+                recording = False
+                recorded_frames = []
+                try:
+                    recorder.stop()
+                    recorder.delete()
+                except Exception:
+                    pass
+                while True:
+                    time.sleep(5)
+                    try:
+                        recorder = create_recorder()
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone reconnected.")
+                        break
+                    except Exception:
+                        pass  # keep waiting
+                continue
+
             keyword_index = porcupine.process(frame)
 
             if recording:
                 recorded_frames.append(frame)
+
+            # Auto-reset mode after inactivity
+            if not recording and current_mode != DEFAULT_MODE:
+                if time.time() - last_activity_time > mode_timeout_minutes * 60:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Mode timeout, resetting to {DEFAULT_MODE}")
+                    current_mode = DEFAULT_MODE
 
             if keyword_index >= 0:
                 # If audio is playing, interrupt it instead of starting recording
@@ -221,15 +328,23 @@ def main():
                     continue
 
                 if not recording:
-                    # Start recording
+                    # Announce current mode, then beep — only start recording AFTER
+                    say_and_beep(current_mode)
+                    # Drain mic buffer for 1s to flush any speaker bleed
+                    flush_end = time.time() + 1.0
+                    while time.time() < flush_end:
+                        try:
+                            recorder.read()
+                        except Exception:
+                            break
                     recording = True
                     recorded_frames = []
-                    play_sound(SOUND_START)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Recording started...")
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Recording started [{current_mode}]...")
                 else:
                     # Stop recording
                     recording = False
                     play_sound(SOUND_STOP)
+                    last_activity_time = time.time()
                     duration = len(recorded_frames) * porcupine.frame_length / sample_rate
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Recording stopped ({duration:.1f}s)")
 
@@ -263,11 +378,30 @@ def main():
                         print("  Empty transcription, skipping.")
                         continue
 
-                    print(f"  Transcribed: {text}")
+                    print(f"  Raw transcription: {text}")
+
+                    # Mode switch detection — check before full cleaning
+                    # (clean_transcription strips leading mode words which would break this)
+                    raw_stripped = strip_wake_words(text)
+                    raw_stripped_lower = raw_stripped.lower().strip().strip(".,!?;:\"'")
+                    mode_switched = False
+                    for mode, pattern in mode_switch_patterns.items():
+                        if pattern.match(raw_stripped_lower):
+                            switch_mode(mode)
+                            play_sound(SOUND_CLIPBOARD)
+                            mode_switched = True
+                            break
+                    if mode_switched:
+                        print()
+                        continue
 
                     # Route based on keyword
                     cleaned = clean_transcription(text)
+                    if not cleaned:
+                        print("  Empty after cleaning, skipping.\n")
+                        continue
                     cleaned_lower = cleaned.lower()
+                    print(f"  Cleaned: {cleaned_lower}")
 
                     # Cancel detection — last word before wake word
                     if cleaned_lower.endswith(cancel_keyword):
@@ -279,16 +413,13 @@ def main():
                         voice_log.new_session()
                         play_sound(SOUND_CLIPBOARD)
                         print(f"  New voice session started.\n")
-                    elif cleaned_lower.startswith(agent_keyword):
-                        agent_text = cleaned[len(agent_keyword):].strip()
-                        if agent_text:
-                            voice_log.log("Pavel", agent_text)
-                            inject_message(agent_text, CHAT_JID)
-                            print(f"  Injected into NanoClaw. Waiting for response...\n")
-                        else:
-                            print("  Agent keyword detected but no text to send.\n")
+                    elif current_mode == MODE_AUDIO:
+                        # In audio mode, everything goes to the agent (no keyword needed)
+                        voice_log.log("Pavel", cleaned)
+                        inject_message(cleaned, CHAT_JID)
+                        print(f"  Injected into NanoClaw. Waiting for response...\n")
                     else:
-                        # Default: clipboard
+                        # Clipboard mode (default)
                         copy_to_clipboard(cleaned)
                         play_sound(SOUND_CLIPBOARD)
                         print(f"  Copied to clipboard: {cleaned}\n")
@@ -296,8 +427,11 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
-        recorder.stop()
-        recorder.delete()
+        try:
+            recorder.stop()
+            recorder.delete()
+        except Exception:
+            pass
         porcupine.delete()
 
 
