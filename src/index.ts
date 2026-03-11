@@ -10,6 +10,7 @@ import {
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
+  VOICE_TRANSCRIPTS_ENABLED,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
@@ -267,6 +268,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           const audio = await textToSpeech(text);
           if (audio) {
             await channel.sendVoice!(chatJid, audio);
+            // Send text transcript of the voice response
+            if (VOICE_TRANSCRIPTS_ENABLED) {
+              await channel.sendMessage(chatJid, `🔊 ${text}`);
+            }
             // Play audio locally on Mac
             playAudioLocally(audio);
           } else {

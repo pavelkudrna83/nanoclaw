@@ -1,7 +1,7 @@
 import { Bot } from 'grammy';
 import https from 'https';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN, VOICE_TRANSCRIPTS_ENABLED } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { transcribeBuffer } from '../transcription.js';
@@ -193,6 +193,20 @@ export class TelegramChannel implements Channel {
         const content = transcript
           ? `[Voice: ${transcript.trim()}]`
           : '[Voice Message - transcription unavailable]';
+
+        // Send voice transcript as reply to original voice message
+        if (VOICE_TRANSCRIPTS_ENABLED && transcript) {
+          try {
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `🎤 ${transcript.trim()}`.slice(0, 4096),
+              { reply_parameters: { message_id: ctx.message.message_id } },
+            );
+          } catch (err) {
+            logger.warn({ err }, 'Failed to send input transcript');
+          }
+        }
+
         storeNonText(ctx, content);
       } catch (err) {
         logger.error({ err }, 'Telegram voice transcription failed');

@@ -14,17 +14,25 @@ interface TtsConfig {
 }
 
 function loadConfig(): TtsConfig {
-  const env = readEnvFile(['TTS_PROVIDER', 'TTS_OPENAI_VOICE', 'TTS_SYSTEM_VOICE', 'TTS_SYSTEM_RATE']);
+  const env = readEnvFile([
+    'TTS_PROVIDER',
+    'TTS_OPENAI_VOICE',
+    'TTS_SYSTEM_VOICE',
+    'TTS_SYSTEM_RATE',
+  ]);
   return {
     provider: (env.TTS_PROVIDER as TtsProvider) || 'openai',
-    openaiModel: 'tts-1',
+    openaiModel: 'tts-1-hd',
     openaiVoice: env.TTS_OPENAI_VOICE || 'nova',
     systemVoice: env.TTS_SYSTEM_VOICE || 'Zuzana',
-    systemRate: parseInt(env.TTS_SYSTEM_RATE || '190', 10),
+    systemRate: parseInt(env.TTS_SYSTEM_RATE || '240', 10),
   };
 }
 
-async function openaiTts(text: string, config: TtsConfig): Promise<Buffer | null> {
+async function openaiTts(
+  text: string,
+  config: TtsConfig,
+): Promise<Buffer | null> {
   const env = readEnvFile(['OPENAI_API_KEY']);
   const apiKey = env.OPENAI_API_KEY;
 
@@ -56,30 +64,60 @@ async function openaiTts(text: string, config: TtsConfig): Promise<Buffer | null
 function systemTts(text: string, config: TtsConfig): Promise<Buffer | null> {
   return new Promise((resolve) => {
     // macOS say → AIFF → ffmpeg → opus in memory
-    const sayArgs = ['-v', config.systemVoice, '-r', String(config.systemRate), '-o', '/dev/stdout', '--data-format=LEI16@22050', text];
-    execFile('say', sayArgs, { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err || !stdout?.length) {
-        console.error('System TTS (say) failed:', err);
-        resolve(null);
-        return;
-      }
-      // Convert raw audio to opus via ffmpeg
-      const ffmpeg = execFile(
-        'ffmpeg',
-        ['-f', 's16le', '-ar', '22050', '-ac', '1', '-i', 'pipe:0', '-c:a', 'libopus', '-b:a', '48k', '-f', 'ogg', 'pipe:1'],
-        { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 },
-        (ffErr, ffOut) => {
-          if (ffErr || !ffOut?.length) {
-            console.error('System TTS ffmpeg conversion failed:', ffErr);
-            resolve(null);
-            return;
-          }
-          resolve(ffOut);
-        },
-      );
-      ffmpeg.stdin?.write(stdout);
-      ffmpeg.stdin?.end();
-    });
+    const sayArgs = [
+      '-v',
+      config.systemVoice,
+      '-r',
+      String(config.systemRate),
+      '-o',
+      '/dev/stdout',
+      '--data-format=LEI16@22050',
+      text,
+    ];
+    execFile(
+      'say',
+      sayArgs,
+      { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err || !stdout?.length) {
+          console.error('System TTS (say) failed:', err);
+          resolve(null);
+          return;
+        }
+        // Convert raw audio to opus via ffmpeg
+        const ffmpeg = execFile(
+          'ffmpeg',
+          [
+            '-f',
+            's16le',
+            '-ar',
+            '22050',
+            '-ac',
+            '1',
+            '-i',
+            'pipe:0',
+            '-c:a',
+            'libopus',
+            '-b:a',
+            '48k',
+            '-f',
+            'ogg',
+            'pipe:1',
+          ],
+          { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 },
+          (ffErr, ffOut) => {
+            if (ffErr || !ffOut?.length) {
+              console.error('System TTS ffmpeg conversion failed:', ffErr);
+              resolve(null);
+              return;
+            }
+            resolve(ffOut);
+          },
+        );
+        ffmpeg.stdin?.write(stdout);
+        ffmpeg.stdin?.end();
+      },
+    );
   });
 }
 

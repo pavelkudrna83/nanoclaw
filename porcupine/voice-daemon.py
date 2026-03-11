@@ -267,8 +267,8 @@ def main():
     # Mode switch patterns — transcription contains just the mode switch command
     # Whisper can transcribe "audio session" in many ways: "audio session", "audio sešn", etc.
     mode_switch_patterns = {
-        MODE_AUDIO: re.compile(r'^audio[\s-]*se[sš]+[ieaí]?[oó]?n?$', re.IGNORECASE),
-        MODE_CLIPBOARD: re.compile(r'^schr[áa]nka$', re.IGNORECASE),
+        MODE_AUDIO: re.compile(r'^audio[\s-]*(se[sš]+[ieaí]?[oó]?n?|m[oó]d)$', re.IGNORECASE),
+        MODE_CLIPBOARD: re.compile(r'^schr[áa]nka[\s-]*(m[oó]d)?$', re.IGNORECASE),
     }
 
     def create_recorder():
