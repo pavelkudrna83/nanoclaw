@@ -12,6 +12,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendVoice: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -73,25 +74,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
-                const targetGroup = registeredGroups[data.chatJid];
-                if (
-                  isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
-                ) {
-                  await deps.sendMessage(data.chatJid, data.text);
-                  logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'IPC message sent',
-                  );
-                } else {
-                  logger.warn(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'Unauthorized IPC message attempt blocked',
-                  );
-                }
-              }
+              await processMessageIpc(data, sourceGroup, isMain, deps);
               fs.unlinkSync(filePath);
             } catch (err) {
               logger.error(
@@ -151,6 +134,48 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
   processIpcFiles();
   logger.info('IPC watcher started (per-group namespaces)');
+}
+
+/**
+ * Process a single IPC message (send_message from container).
+ * Returns 'sent' | 'voice' | 'unauthorized' | 'skipped'.
+ */
+export async function processMessageIpc(
+  data: { type?: string; chatJid?: string; text?: string; voice?: boolean },
+  sourceGroup: string,
+  isMain: boolean,
+  deps: Pick<IpcDeps, 'sendMessage' | 'sendVoice' | 'registeredGroups'>,
+): Promise<'sent' | 'voice' | 'unauthorized' | 'skipped'> {
+  if (data.type !== 'message' || !data.chatJid || !data.text) {
+    return 'skipped';
+  }
+
+  const registeredGroups = deps.registeredGroups();
+  const targetGroup = registeredGroups[data.chatJid];
+
+  if (!isMain && !(targetGroup && targetGroup.folder === sourceGroup)) {
+    logger.warn(
+      { chatJid: data.chatJid, sourceGroup },
+      'Unauthorized IPC message attempt blocked',
+    );
+    return 'unauthorized';
+  }
+
+  if (data.voice) {
+    await deps.sendVoice(data.chatJid, data.text);
+    logger.info(
+      { chatJid: data.chatJid, sourceGroup },
+      'IPC voice message sent',
+    );
+    return 'voice';
+  }
+
+  await deps.sendMessage(data.chatJid, data.text);
+  logger.info(
+    { chatJid: data.chatJid, sourceGroup },
+    'IPC message sent',
+  );
+  return 'sent';
 }
 
 export async function processTaskIpc(

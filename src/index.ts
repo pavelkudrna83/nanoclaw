@@ -634,6 +634,23 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendVoice: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      const audio = await textToSpeech(text);
+      if (audio && channel.sendVoice) {
+        await channel.sendVoice(jid, audio);
+        // Also send text transcript so user sees the message in chat
+        if (VOICE_TRANSCRIPTS_ENABLED) {
+          await channel.sendMessage(jid, `🔊 ${text}`);
+        }
+        playAudioLocally(audio);
+      } else {
+        // TTS failed or channel doesn't support voice — fall back to text
+        logger.warn({ jid }, 'Voice send failed, falling back to text');
+        await channel.sendMessage(jid, text);
+      }
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {

@@ -41,24 +41,26 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
+  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Set voice=true to also send as a voice message (text-to-speech) — use for time-sensitive alerts, heartbeat notifications, or when the user is away from screen.",
   {
     text: z.string().describe('The message text to send'),
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    voice: z.boolean().optional().describe('When true, the message is also sent as a voice message (TTS) and played locally. Use for alerts like block transitions, meeting reminders, or urgent notifications.'),
   },
   async (args) => {
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | boolean | undefined> = {
       type: 'message',
       chatJid,
       text: args.text,
       sender: args.sender || undefined,
+      voice: args.voice || undefined,
       groupFolder,
       timestamp: new Date().toISOString(),
     };
 
     writeIpcFile(MESSAGES_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
+    return { content: [{ type: 'text' as const, text: args.voice ? 'Voice message sent.' : 'Message sent.' }] };
   },
 );
 
