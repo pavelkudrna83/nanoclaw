@@ -55,7 +55,7 @@ def play_sound(path):
 
 
 def is_audio_playing():
-    """Check if NanoClaw is currently playing audio via ffplay."""
+    """Check if NanoClaw is currently playing audio via afplay."""
     try:
         with open(PLAYBACK_PID_FILE) as f:
             pid = int(f.read().strip())
@@ -66,14 +66,18 @@ def is_audio_playing():
 
 
 def stop_audio_playback():
-    """Kill the running ffplay process."""
+    """Kill the running audio playback process (afplay) and its process group."""
     pid = is_audio_playing()
     if pid:
         try:
-            os.kill(pid, 15)  # SIGTERM
-            print(f"  Audio playback interrupted (pid {pid})")
-        except ProcessLookupError:
-            pass
+            os.killpg(os.getpgid(pid), 15)  # SIGTERM to process group
+            print(f"  Audio playback interrupted (pgid of pid {pid})")
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, 15)  # fallback to single process kill
+                print(f"  Audio playback interrupted (pid {pid})")
+            except ProcessLookupError:
+                pass
         try:
             os.unlink(PLAYBACK_PID_FILE)
         except FileNotFoundError:
@@ -186,6 +190,95 @@ class VoiceSessionLog:
             f.write(f"**{sender}** ({now}): {text}\n\n")
 
 
+def run_diagnostics(chat_jid, bot_token=None):
+    """Run system diagnostics and report via voice."""
+    results = []
+
+    # 1. Audio výstup (afplay)
+    try:
+        r = subprocess.run(["afplay", "/System/Library/Sounds/Ping.aiff"],
+                          timeout=5, capture_output=True)
+        results.append(("Audio výstup", r.returncode == 0))
+    except Exception:
+        results.append(("Audio výstup", False))
+
+    # 2. Přehrání OGG (afplay s rate)
+    test_ogg = os.path.join(tempfile.gettempdir(), "nanoclaw-diag.ogg")
+    try:
+        subprocess.run(["/opt/homebrew/bin/ffmpeg", "-f", "lavfi",
+                       "-i", "sine=frequency=440:duration=0.5",
+                       "-c:a", "libopus", "-f", "ogg", test_ogg,
+                       "-y", "-loglevel", "error"],
+                      timeout=5, capture_output=True)
+        r = subprocess.run(["afplay", "-r", "1.25", test_ogg],
+                          timeout=5, capture_output=True)
+        results.append(("OGG přehrávání", r.returncode == 0))
+    except Exception:
+        results.append(("OGG přehrávání", False))
+    finally:
+        try:
+            os.unlink(test_ogg)
+        except OSError:
+            pass
+
+    # 3. Databáze
+    try:
+        db = sqlite3.connect(DB_PATH)
+        count = db.execute("SELECT COUNT(*) FROM messages WHERE chat_jid = ?",
+                          (chat_jid,)).fetchone()[0]
+        db.close()
+        results.append(("Databáze", True, f"{count} zpráv"))
+    except Exception as e:
+        results.append(("Databáze", False, str(e)))
+
+    # 4. NanoClaw process
+    try:
+        r = subprocess.run(["pgrep", "-f", "nanoclaw.*index"],
+                          capture_output=True, text=True, timeout=5)
+        running = r.returncode == 0
+        results.append(("NanoClaw proces", running))
+    except Exception:
+        results.append(("NanoClaw proces", False))
+
+    # 5. Audio zařízení
+    try:
+        mic = subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-t", "input", "-c"],
+                            capture_output=True, text=True, timeout=5)
+        spk = subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-t", "output", "-c"],
+                            capture_output=True, text=True, timeout=5)
+        mic_name = mic.stdout.strip()
+        spk_name = spk.stdout.strip()
+        results.append(("Mikrofon", bool(mic_name), mic_name))
+        results.append(("Reproduktor", bool(spk_name), spk_name))
+    except Exception:
+        results.append(("Audio zařízení", False))
+
+    # Sestavit hlášení
+    ok_count = sum(1 for r in results if r[1])
+    total = len(results)
+
+    lines = [f"Diagnostika: {ok_count} z {total} ok."]
+    for r in results:
+        status = "ok" if r[1] else "chyba"
+        detail = f", {r[2]}" if len(r) > 2 else ""
+        lines.append(f"{r[0]}: {status}{detail}")
+        print(f"  DIAG: {r[0]}: {status}{detail}")
+
+    # Nahlásit výsledky hlasem
+    report = ". ".join(lines)
+    subprocess.Popen(["say", "-v", "Zuzana", "-r", "220", report],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Odeslat do Telegramu
+    if bot_token:
+        tg_report = "\n".join([f"{'✅' if r[1] else '❌'} {r[0]}" +
+                              (f" ({r[2]})" if len(r) > 2 else "")
+                              for r in results])
+        send_telegram_transcript(f"🔧 Diagnostika:\n{tg_report}", chat_jid, bot_token)
+
+    return results
+
+
 def frames_to_wav(frames, sample_rate):
     """Convert raw PCM frames to WAV bytes."""
     buf = io.BytesIO()
@@ -218,6 +311,7 @@ def main():
     agent_keyword = settings.get("agent_keyword", "audio").lower()
     session_keyword = settings.get("session_keyword", "nová session").lower()
     cancel_keyword = settings.get("cancel_keyword", "zrušit").lower()
+    test_keyword = settings.get("test_keyword", "testy").lower()
     group_folder = settings.get("group_folder", "telegram_main")
     mode_timeout_minutes = settings.get("mode_timeout_minutes", 10)
     voice_log = VoiceSessionLog(group_folder)
@@ -428,6 +522,13 @@ def main():
                     if cleaned_lower.endswith(cancel_keyword):
                         play_sound(SOUND_CANCEL)
                         print(f"  Cancelled.\n")
+                        continue
+
+                    # Diagnostika
+                    if cleaned_lower.startswith(test_keyword):
+                        play_sound(SOUND_CLIPBOARD)
+                        print(f"  Running diagnostics...\n")
+                        run_diagnostics(CHAT_JID, bot_token)
                         continue
 
                     if cleaned_lower.startswith(session_keyword):

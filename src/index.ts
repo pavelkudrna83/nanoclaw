@@ -151,8 +151,9 @@ function playAudioLocally(audio: Buffer): void {
   const tmpFile = path.join(os.tmpdir(), `nanoclaw-play-${Date.now()}.ogg`);
   fs.writeFileSync(tmpFile, audio);
   const child = exec(
-    `/opt/homebrew/bin/ffplay -nodisp -autoexit -loglevel quiet -af "atempo=1.25" "${tmpFile}"`,
-    (err) => {
+    `afplay -r 1.25 "${tmpFile}"`,
+    { timeout: 120_000 },
+    (err, _stdout, stderr) => {
       try {
         fs.unlinkSync(tmpFile);
       } catch {}
@@ -160,7 +161,7 @@ function playAudioLocally(audio: Buffer): void {
         fs.unlinkSync(PLAYBACK_PID_FILE);
       } catch {}
       if (err && (err as any).killed) return; // interrupted by voice daemon
-      if (err) logger.warn({ err }, 'Local audio playback failed');
+      if (err) logger.warn({ err, stderr }, 'Local audio playback failed');
     },
   );
   if (child.pid) {
@@ -410,6 +411,21 @@ async function startMessageLoop(): Promise<void> {
     return;
   }
   messageLoopRunning = true;
+
+  // Cleanup stale playback temp files and PID file from previous runs
+  try {
+    const tmpDir = os.tmpdir();
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (f.startsWith('nanoclaw-play-')) {
+        try {
+          fs.unlinkSync(path.join(tmpDir, f));
+        } catch {}
+      }
+    }
+    try {
+      fs.unlinkSync(PLAYBACK_PID_FILE);
+    } catch {}
+  } catch {}
 
   logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
 
