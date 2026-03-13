@@ -326,7 +326,7 @@ function waitForIpcMessage(): Promise<string | null> {
 const MCP_SERVERS_CONFIG_PATH = '/workspace/mcp-servers.json';
 
 interface McpServerConfig {
-  type: 'sse';
+  type: 'sse' | 'http';
   url: string;
   authEnvVar?: string;
 }
@@ -361,13 +361,13 @@ function loadMcpServerNames(): string[] {
 
 function buildMcpServersFromConfig(
   sdkEnv: Record<string, string | undefined>,
-): Record<string, { type: 'sse'; url: string; headers?: Record<string, string> }> {
+): Record<string, { type: 'sse' | 'http'; url: string; headers?: Record<string, string> }> {
   const config = getMcpServersConfig();
-  const servers: Record<string, { type: 'sse'; url: string; headers?: Record<string, string> }> = {};
+  const servers: Record<string, { type: 'sse' | 'http'; url: string; headers?: Record<string, string> }> = {};
 
   for (const [name, server] of Object.entries(config)) {
-    const entry: { type: 'sse'; url: string; headers?: Record<string, string> } = {
-      type: 'sse' as const,
+    const entry: { type: 'sse' | 'http'; url: string; headers?: Record<string, string> } = {
+      type: server.type,
       url: server.url,
     };
     if (server.authEnvVar) {

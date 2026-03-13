@@ -85,14 +85,22 @@ describe('processMessageIpc — text messages', () => {
 describe('processMessageIpc — voice messages', () => {
   it('sends voice message when voice flag is true', async () => {
     const result = await processMessageIpc(
-      { type: 'message', chatJid: 'tg:123', text: 'Focus blok končí za 10 minut', voice: true },
+      {
+        type: 'message',
+        chatJid: 'tg:123',
+        text: 'Focus blok končí za 10 minut',
+        voice: true,
+      },
       'telegram_main',
       true,
       deps,
     );
 
     expect(result).toBe('voice');
-    expect(sendVoice).toHaveBeenCalledWith('tg:123', 'Focus blok končí za 10 minut');
+    expect(sendVoice).toHaveBeenCalledWith(
+      'tg:123',
+      'Focus blok končí za 10 minut',
+    );
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -128,7 +136,12 @@ describe('processMessageIpc — authorization', () => {
 
   it('blocks non-main group sending voice to another group', async () => {
     const result = await processMessageIpc(
-      { type: 'message', chatJid: 'tg:123', text: 'Unauthorized voice', voice: true },
+      {
+        type: 'message',
+        chatJid: 'tg:123',
+        text: 'Unauthorized voice',
+        voice: true,
+      },
       'other-group',
       false,
       deps,
@@ -160,12 +173,20 @@ describe('processMessageIpc — authorization', () => {
     );
 
     expect(result).toBe('sent');
-    expect(sendMessage).toHaveBeenCalledWith('tg:999', 'Main can send anywhere');
+    expect(sendMessage).toHaveBeenCalledWith(
+      'tg:999',
+      'Main can send anywhere',
+    );
   });
 
   it('main group can send voice to unregistered JID', async () => {
     const result = await processMessageIpc(
-      { type: 'message', chatJid: 'tg:999', text: 'Voice anywhere', voice: true },
+      {
+        type: 'message',
+        chatJid: 'tg:999',
+        text: 'Voice anywhere',
+        voice: true,
+      },
       'telegram_main',
       true,
       deps,
@@ -215,12 +236,7 @@ describe('processMessageIpc — skipped messages', () => {
   });
 
   it('skips empty object', async () => {
-    const result = await processMessageIpc(
-      {},
-      'telegram_main',
-      true,
-      deps,
-    );
+    const result = await processMessageIpc({}, 'telegram_main', true, deps);
 
     expect(result).toBe('skipped');
   });

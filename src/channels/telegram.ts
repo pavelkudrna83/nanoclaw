@@ -1,7 +1,11 @@
 import { Bot } from 'grammy';
 import https from 'https';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN, VOICE_TRANSCRIPTS_ENABLED } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  TRIGGER_PATTERN,
+  VOICE_TRANSCRIPTS_ENABLED,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { transcribeBuffer } from '../transcription.js';

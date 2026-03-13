@@ -171,10 +171,7 @@ export async function processMessageIpc(
   }
 
   await deps.sendMessage(data.chatJid, data.text);
-  logger.info(
-    { chatJid: data.chatJid, sourceGroup },
-    'IPC message sent',
-  );
+  logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
   return 'sent';
 }
 

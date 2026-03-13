@@ -113,8 +113,25 @@ def inject_message(text, chat_jid):
     return now
 
 
+def send_telegram_transcript(text, chat_jid, bot_token):
+    """Send voice transcript to Telegram so user sees it in chat."""
+    import urllib.request
+    import urllib.parse
+    numeric_id = chat_jid.replace("tg:", "")
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    data = urllib.parse.urlencode({
+        "chat_id": numeric_id,
+        "text": f"🎤 {text}",
+    }).encode()
+    try:
+        req = urllib.request.Request(url, data=data)
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"  Failed to send Telegram transcript: {e}")
+
+
 _WAKE_WORD_RE = re.compile(
-    r'\s*[,.]?\s*(?:h[ea][ij]\s*[dg][iy]\s*m+[iey]+|h[ea]j[iy]m[iey]+|g[iy]m+[iey]+|h[ea][iy])[\s.,!?]*$',
+    r'\s*[,.]?\s*(?:h[ea][iy][\s-]*[dgj][iey]+[\s-]*m+[iey]+|h[ea][iy][\s-]*jimm?[iey]|h[ea]j[iy]m[iey]+|g[iy]m+[iey]+|h[ea][iy])[\s.,!?]*$',
     re.IGNORECASE
 )
 
@@ -193,6 +210,10 @@ def main():
         print("ERROR: OPENAI_API_KEY not found in .env")
         sys.exit(1)
 
+    bot_token = env.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        print("WARNING: TELEGRAM_BOT_TOKEN not found in .env, transcripts won't appear in Telegram")
+
     settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
     agent_keyword = settings.get("agent_keyword", "audio").lower()
     session_keyword = settings.get("session_keyword", "nová session").lower()
@@ -243,7 +264,7 @@ def main():
         audio_type = get_audio_type()
         announcement = f"{word}, {audio_type}" if audio_type else word
         print(f"  say: [{announcement}]")
-        proc = subprocess.Popen(["say", "-v", "Zuzana", announcement], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(["say", "-v", "Zuzana", "-r", "220", announcement], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         proc.wait()
         play_sound(SOUND_START)
 
@@ -258,11 +279,11 @@ def main():
             current_mode = new_mode
             label = MODE_LABELS.get(new_mode, new_mode)
             print(f"  Mode switched to: {label}")
-            subprocess.Popen(["say", "-v", "Zuzana", f"Nastavena {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["say", "-v", "Zuzana", "-r", "220", f"Nastavena {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             label = MODE_LABELS.get(new_mode, new_mode)
             print(f"  Already in mode: {label}")
-            subprocess.Popen(["say", "-v", "Zuzana", f"Již {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["say", "-v", "Zuzana", "-r", "220", f"Již {label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # Mode switch patterns — transcription contains just the mode switch command
     # Whisper can transcribe "audio session" in many ways: "audio session", "audio sešn", etc.
@@ -370,7 +391,7 @@ def main():
                                 break
                     if not text:
                         play_sound(SOUND_CANCEL)
-                        subprocess.Popen(["say", "-v", "Zuzana", "Přepis nedostupný"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.Popen(["say", "-v", "Zuzana", "-r", "220", "Přepis nedostupný"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         print("  Transcription unavailable after retries.\n")
                         continue
 
@@ -417,6 +438,8 @@ def main():
                         # In audio mode, everything goes to the agent (no keyword needed)
                         voice_log.log("Pavel", cleaned)
                         inject_message(cleaned, CHAT_JID)
+                        if bot_token:
+                            send_telegram_transcript(cleaned, CHAT_JID, bot_token)
                         print(f"  Injected into NanoClaw. Waiting for response...\n")
                     else:
                         # Clipboard mode (default)
