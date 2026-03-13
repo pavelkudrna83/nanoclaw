@@ -33,6 +33,7 @@ beforeEach(() => {
   deps = {
     sendMessage,
     sendVoice,
+    isVoiceChat: () => false,
     registeredGroups: () => groups,
   };
 });

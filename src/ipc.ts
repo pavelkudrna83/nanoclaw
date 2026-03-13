@@ -13,6 +13,7 @@ import { RegisteredGroup } from './types.js';
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   sendVoice: (jid: string, text: string) => Promise<void>;
+  isVoiceChat: (jid: string) => boolean;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -144,7 +145,10 @@ export async function processMessageIpc(
   data: { type?: string; chatJid?: string; text?: string; voice?: boolean },
   sourceGroup: string,
   isMain: boolean,
-  deps: Pick<IpcDeps, 'sendMessage' | 'sendVoice' | 'registeredGroups'>,
+  deps: Pick<
+    IpcDeps,
+    'sendMessage' | 'sendVoice' | 'isVoiceChat' | 'registeredGroups'
+  >,
 ): Promise<'sent' | 'voice' | 'unauthorized' | 'skipped'> {
   if (data.type !== 'message' || !data.chatJid || !data.text) {
     return 'skipped';
@@ -161,10 +165,13 @@ export async function processMessageIpc(
     return 'unauthorized';
   }
 
-  if (data.voice) {
+  // Send as voice if explicitly requested OR if the user's last message was voice
+  const useVoice = data.voice || deps.isVoiceChat(data.chatJid);
+
+  if (useVoice) {
     await deps.sendVoice(data.chatJid, data.text);
     logger.info(
-      { chatJid: data.chatJid, sourceGroup },
+      { chatJid: data.chatJid, sourceGroup, explicit: !!data.voice },
       'IPC voice message sent',
     );
     return 'voice';
