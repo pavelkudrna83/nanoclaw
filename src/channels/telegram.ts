@@ -204,7 +204,10 @@ export class TelegramChannel implements Channel {
             await ctx.api.sendMessage(
               ctx.chat.id,
               `🎤 ${transcript.trim()}`.slice(0, 4096),
-              { reply_parameters: { message_id: ctx.message.message_id } },
+              {
+                reply_parameters: { message_id: ctx.message.message_id },
+                disable_notification: true,
+              },
             );
           } catch (err) {
             logger.warn({ err }, 'Failed to send input transcript');
@@ -263,14 +266,28 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
+      // Silence notifications for outbound transcript messages (🔊) —
+      // user hears the response locally via afplay, notification sound
+      // would interrupt playback.
+      const silent = text.startsWith('🔊 ');
       if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+        if (silent) {
+          await this.bot.api.sendMessage(numericId, text, {
+            disable_notification: true,
+          });
+        } else {
+          await this.bot.api.sendMessage(numericId, text);
+        }
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-          );
+          const chunk = text.slice(i, i + MAX_LENGTH);
+          if (silent) {
+            await this.bot.api.sendMessage(numericId, chunk, {
+              disable_notification: true,
+            });
+          } else {
+            await this.bot.api.sendMessage(numericId, chunk);
+          }
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
@@ -290,6 +307,7 @@ export class TelegramChannel implements Channel {
       await this.bot.api.sendVoice(
         numericId,
         new InputFile(audio, 'voice.ogg'),
+        { disable_notification: true },
       );
       logger.info({ jid, bytes: audio.length }, 'Telegram voice sent');
     } catch (err) {

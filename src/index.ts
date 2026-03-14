@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -73,6 +73,26 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 // Track chats where the last inbound batch contained a voice message
 const voiceChats = new Set<string>();
+// Heartbeat timers for voice chats — play subtle sound while agent works
+const heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+function startHeartbeat(chatJid: string): void {
+  stopHeartbeat(chatJid);
+  heartbeatTimers.set(
+    chatJid,
+    setInterval(() => {
+      exec('afplay /System/Library/Sounds/Frog.aiff', () => {});
+    }, 10_000),
+  );
+}
+
+function stopHeartbeat(chatJid: string): void {
+  const timer = heartbeatTimers.get(chatJid);
+  if (timer) {
+    clearInterval(timer);
+    heartbeatTimers.delete(chatJid);
+  }
+}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -147,26 +167,59 @@ export function _setRegisteredGroups(
 
 const PLAYBACK_PID_FILE = path.join(os.tmpdir(), 'nanoclaw-playback.pid');
 
-function playAudioLocally(audio: Buffer): void {
-  const tmpFile = path.join(os.tmpdir(), `nanoclaw-play-${Date.now()}.ogg`);
-  fs.writeFileSync(tmpFile, audio);
-  const child = exec(
-    `afplay -r 1.25 "${tmpFile}"`,
-    { timeout: 120_000 },
-    (err, _stdout, stderr) => {
+function playAudioLocally(audio: Buffer): Promise<void> {
+  return new Promise((resolve) => {
+    const ts = Date.now();
+    const oggFile = path.join(os.tmpdir(), `nanoclaw-play-${ts}.ogg`);
+    const cafFile = path.join(os.tmpdir(), `nanoclaw-play-${ts}.caf`);
+    fs.writeFileSync(oggFile, audio);
+
+    // Convert OGG/Opus to CAF — afplay can't decode OGG/Opus fully,
+    // it only plays the first ~1-2 seconds then exits with code 0.
+    const convert = spawn('/opt/homebrew/bin/ffmpeg', ['-y', '-i', oggFile, '-f', 'caf', cafFile], {
+      stdio: 'ignore',
+    });
+
+    convert.on('exit', (convCode) => {
       try {
-        fs.unlinkSync(tmpFile);
+        fs.unlinkSync(oggFile);
       } catch {}
-      try {
-        fs.unlinkSync(PLAYBACK_PID_FILE);
-      } catch {}
-      if (err && (err as any).killed) return; // interrupted by voice daemon
-      if (err) logger.warn({ err, stderr }, 'Local audio playback failed');
-    },
-  );
-  if (child.pid) {
-    fs.writeFileSync(PLAYBACK_PID_FILE, String(child.pid));
-  }
+
+      if (convCode !== 0) {
+        logger.warn({ convCode }, 'ffmpeg OGG→CAF conversion failed');
+        resolve();
+        return;
+      }
+
+      logger.info({ cafFile, fileSize: audio.length }, 'Starting local audio playback');
+
+      const child = spawn('afplay', ['-r', '1.25', cafFile], {
+        detached: true,
+        stdio: 'ignore',
+      });
+
+      if (child.pid) {
+        fs.writeFileSync(PLAYBACK_PID_FILE, String(child.pid));
+      }
+
+      child.on('exit', (code, signal) => {
+        try {
+          fs.unlinkSync(cafFile);
+        } catch {}
+        try {
+          fs.unlinkSync(PLAYBACK_PID_FILE);
+        } catch {}
+        if (signal) {
+          logger.info({ signal }, 'Audio playback killed');
+        } else if (code !== 0) {
+          logger.warn({ code }, 'Local audio playback failed');
+        }
+        resolve();
+      });
+
+      child.unref();
+    });
+  });
 }
 
 /**
@@ -244,6 +297,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  // Start heartbeat for voice chats — play subtle sound while agent works
+  if (voiceChats.has(chatJid)) {
+    startHeartbeat(chatJid);
+  }
+
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
@@ -268,13 +326,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         if (isVoiceReply) {
           const audio = await textToSpeech(text);
           if (audio) {
+            // Play locally first — wait for completion before sending
+            // to Telegram, because Telegram notifications interrupt afplay.
+            await playAudioLocally(audio);
             await channel.sendVoice!(chatJid, audio);
-            // Send text transcript of the voice response
             if (VOICE_TRANSCRIPTS_ENABLED) {
               await channel.sendMessage(chatJid, `🔊 ${text}`);
             }
-            // Play audio locally on Mac
-            playAudioLocally(audio);
           } else {
             logger.warn({ chatJid }, 'TTS failed, falling back to text');
             await channel.sendMessage(chatJid, text);
@@ -283,6 +341,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           await channel.sendMessage(chatJid, text);
         }
         voiceChats.delete(chatJid);
+        stopHeartbeat(chatJid);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -300,6 +359,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+  stopHeartbeat(chatJid);
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -648,20 +708,27 @@ async function main(): Promise<void> {
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Stop heartbeat when any message is sent via IPC (agent responded)
+      voiceChats.delete(jid);
+      stopHeartbeat(jid);
       return channel.sendMessage(jid, text);
     },
     isVoiceChat: (jid) => voiceChats.has(jid),
     sendVoice: async (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Stop heartbeat when voice response is sent via IPC
+      voiceChats.delete(jid);
+      stopHeartbeat(jid);
       const audio = await textToSpeech(text);
       if (audio && channel.sendVoice) {
+        // Play locally first — wait for completion before sending
+        // to Telegram, because Telegram notifications interrupt afplay.
+        await playAudioLocally(audio);
         await channel.sendVoice(jid, audio);
-        // Also send text transcript so user sees the message in chat
         if (VOICE_TRANSCRIPTS_ENABLED) {
           await channel.sendMessage(jid, `🔊 ${text}`);
         }
-        playAudioLocally(audio);
       } else {
         // TTS failed or channel doesn't support voice — fall back to text
         logger.warn({ jid }, 'Voice send failed, falling back to text');

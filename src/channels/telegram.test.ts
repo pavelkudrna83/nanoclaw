@@ -31,6 +31,9 @@ type Handler = (...args: any[]) => any;
 const botRef = vi.hoisted(() => ({ current: null as any }));
 
 vi.mock('grammy', () => ({
+  InputFile: class MockInputFile {
+    constructor(public data: any, public filename?: string) {}
+  },
   Bot: class MockBot {
     token: string;
     commandHandlers = new Map<string, Handler>();
@@ -39,6 +42,7 @@ vi.mock('grammy', () => ({
 
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendVoice: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -785,6 +789,80 @@ describe('TelegramChannel', () => {
 
       // Don't connect — bot is null
       await channel.sendMessage('tg:100200300', 'No bot');
+
+      // No error, no API call
+    });
+  });
+
+  // --- sendMessage: disable_notification ---
+
+  describe('sendMessage silent notifications', () => {
+    it('sends 🔊 transcript with disable_notification', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', '🔊 Hello world');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        '🔊 Hello world',
+        { disable_notification: true },
+      );
+    });
+
+    it('sends 🎤 transcript with disable_notification', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Simulate inbound voice transcript (handled via sendMessage in voice handler)
+      await channel.sendMessage('tg:100200300', 'Regular text');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'Regular text',
+      );
+    });
+
+    it('does not silence regular messages', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', 'Normal response');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'Normal response',
+      );
+    });
+  });
+
+  // --- sendVoice ---
+
+  describe('sendVoice', () => {
+    it('sends voice with disable_notification', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const audio = Buffer.from('fake-ogg-data');
+      await channel.sendVoice('tg:100200300', audio);
+
+      expect(currentBot().api.sendVoice).toHaveBeenCalledWith(
+        '100200300',
+        expect.anything(),
+        { disable_notification: true },
+      );
+    });
+
+    it('does nothing when bot is not initialized', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+
+      const audio = Buffer.from('fake-ogg-data');
+      await channel.sendVoice('tg:100200300', audio);
 
       // No error, no API call
     });

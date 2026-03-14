@@ -126,6 +126,7 @@ def send_telegram_transcript(text, chat_jid, bot_token):
     data = urllib.parse.urlencode({
         "chat_id": numeric_id,
         "text": f"🎤 {text}",
+        "disable_notification": "true",
     }).encode()
     try:
         req = urllib.request.Request(url, data=data)
@@ -135,7 +136,7 @@ def send_telegram_transcript(text, chat_jid, bot_token):
 
 
 _WAKE_WORD_RE = re.compile(
-    r'\s*[,.]?\s*(?:h[ea][iy][\s-]*[dgj][iey]+[\s-]*m+[iey]+|h[ea][iy][\s-]*jimm?[iey]|h[ea]j[iy]m[iey]+|g[iy]m+[iey]+|h[ea][iy])[\s.,!?]*$',
+    r'\s*[,.]?\s*(?:h[ea][ijy][\s-]*[dgj][iey]+[\s-]*m+[iey]+|h[ea][ijy][\s-]*jimm?[iey]|h[ea]j[iy]m[iey]+|g[iy]m+[iey]+|h[ea][ijy])[\s.,!?]*$',
     re.IGNORECASE
 )
 
