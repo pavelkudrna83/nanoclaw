@@ -200,17 +200,29 @@ export class TelegramChannel implements Channel {
 
         // Send voice transcript as reply to original voice message
         if (VOICE_TRANSCRIPTS_ENABLED && transcript) {
-          try {
-            await ctx.api.sendMessage(
-              ctx.chat.id,
-              `🎤 ${transcript.trim()}`.slice(0, 4096),
-              {
-                reply_parameters: { message_id: ctx.message.message_id },
-                disable_notification: true,
-              },
-            );
-          } catch (err) {
-            logger.warn({ err }, 'Failed to send input transcript');
+          const voiceSender =
+            ctx.from?.first_name ||
+            ctx.from?.username ||
+            ctx.from?.id?.toString() ||
+            'Unknown';
+          const transcriptText = transcript.trim();
+          if (transcriptText && transcriptText !== '...') {
+            try {
+              logger.info(
+                { voiceSender, transcriptText },
+                'Sending voice input transcript',
+              );
+              await ctx.api.sendMessage(
+                ctx.chat.id,
+                `✏️ ${voiceSender}: ${transcriptText}`.slice(0, 4096),
+                {
+                  reply_parameters: { message_id: ctx.message.message_id },
+                  disable_notification: true,
+                },
+              );
+            } catch (err) {
+              logger.warn({ err }, 'Failed to send input transcript');
+            }
           }
         }
 

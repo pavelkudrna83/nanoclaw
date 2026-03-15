@@ -125,7 +125,7 @@ def send_telegram_transcript(text, chat_jid, bot_token):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     data = urllib.parse.urlencode({
         "chat_id": numeric_id,
-        "text": f"🎤 {text}",
+        "text": f"🎤 Pavel: {text}",
         "disable_notification": "true",
     }).encode()
     try:
@@ -513,7 +513,7 @@ def main():
 
                     # Route based on keyword
                     cleaned = clean_transcription(text)
-                    if not cleaned:
+                    if not cleaned or cleaned.strip('.… ') == '':
                         print("  Empty after cleaning, skipping.\n")
                         continue
                     cleaned_lower = cleaned.lower()

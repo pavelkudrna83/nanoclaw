@@ -176,9 +176,13 @@ function playAudioLocally(audio: Buffer): Promise<void> {
 
     // Convert OGG/Opus to CAF — afplay can't decode OGG/Opus fully,
     // it only plays the first ~1-2 seconds then exits with code 0.
-    const convert = spawn('/opt/homebrew/bin/ffmpeg', ['-y', '-i', oggFile, '-f', 'caf', cafFile], {
-      stdio: 'ignore',
-    });
+    const convert = spawn(
+      '/opt/homebrew/bin/ffmpeg',
+      ['-y', '-i', oggFile, '-f', 'caf', cafFile],
+      {
+        stdio: 'ignore',
+      },
+    );
 
     convert.on('exit', (convCode) => {
       try {
@@ -191,7 +195,10 @@ function playAudioLocally(audio: Buffer): Promise<void> {
         return;
       }
 
-      logger.info({ cafFile, fileSize: audio.length }, 'Starting local audio playback');
+      logger.info(
+        { cafFile, fileSize: audio.length },
+        'Starting local audio playback',
+      );
 
       const child = spawn('afplay', ['-r', '1.25', cafFile], {
         detached: true,
@@ -331,7 +338,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             await playAudioLocally(audio);
             await channel.sendVoice!(chatJid, audio);
             if (VOICE_TRANSCRIPTS_ENABLED) {
-              await channel.sendMessage(chatJid, `🔊 ${text}`);
+              await channel.sendMessage(chatJid, `🔊 ${ASSISTANT_NAME}: ${text}`);
             }
           } else {
             logger.warn({ chatJid }, 'TTS failed, falling back to text');
@@ -727,7 +734,7 @@ async function main(): Promise<void> {
         await playAudioLocally(audio);
         await channel.sendVoice(jid, audio);
         if (VOICE_TRANSCRIPTS_ENABLED) {
-          await channel.sendMessage(jid, `🔊 ${text}`);
+          await channel.sendMessage(jid, `🔊 ${ASSISTANT_NAME}: ${text}`);
         }
       } else {
         // TTS failed or channel doesn't support voice — fall back to text

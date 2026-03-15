@@ -32,7 +32,10 @@ const botRef = vi.hoisted(() => ({ current: null as any }));
 
 vi.mock('grammy', () => ({
   InputFile: class MockInputFile {
-    constructor(public data: any, public filename?: string) {}
+    constructor(
+      public data: any,
+      public filename?: string,
+    ) {}
   },
   Bot: class MockBot {
     token: string;
