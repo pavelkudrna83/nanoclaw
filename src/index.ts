@@ -338,7 +338,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             await playAudioLocally(audio);
             await channel.sendVoice!(chatJid, audio);
             if (VOICE_TRANSCRIPTS_ENABLED) {
-              await channel.sendMessage(chatJid, `🔊 ${ASSISTANT_NAME}: ${text}`);
+              await channel.sendMessage(
+                chatJid,
+                `🔊 ${ASSISTANT_NAME}: ${text}`,
+              );
             }
           } else {
             logger.warn({ chatJid }, 'TTS failed, falling back to text');

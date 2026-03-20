@@ -1,5 +1,5 @@
 {
-  "allowedHostPorts": [5520, 5530],
+  "allowedHostPorts": [5520, 5521, 5530],
   "allowInternet": true,
   "blockPrivateRanges": true
 }

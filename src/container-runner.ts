@@ -26,12 +26,35 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+
+/**
+ * Read authEnvVar values from mcp-servers.json and resolve them from .env.
+ * Returns env pairs to pass into the container so the agent-runner can
+ * authenticate against MCP servers.
+ */
+function readMcpAuthEnvVars(): Record<string, string> {
+  const root = process.cwd();
+  const mcpPath = path.join(root, 'mcp-servers.json');
+  if (!fs.existsSync(mcpPath)) return {};
+  try {
+    const config = JSON.parse(fs.readFileSync(mcpPath, 'utf-8'));
+    const keys: string[] = [];
+    for (const server of Object.values(config) as Array<{ authEnvVar?: string }>) {
+      if (server.authEnvVar) keys.push(server.authEnvVar);
+    }
+    if (keys.length === 0) return {};
+    return readEnvFile(keys);
+  } catch {
+    return {};
+  }
+}
 
 export interface ContainerInput {
   prompt: string;
@@ -258,6 +281,15 @@ function buildContainerArgs(
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
+
+  // Pass MCP server auth tokens so the agent-runner can authenticate
+  const mcpAuthVars = readMcpAuthEnvVars();
+  for (const [key, value] of Object.entries(mcpAuthVars)) {
+    args.push('-e', `${key}=${value}`);
+  }
+
+  // Allow self-signed certs for MCP servers (gateway uses self-signed HTTPS)
+  args.push('-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0');
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

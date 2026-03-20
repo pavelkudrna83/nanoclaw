@@ -1,7 +1,7 @@
 {
   "nanoclaw-gateway": {
     "type": "http",
-    "url": "http://host.docker.internal:5520/",
+    "url": "https://host.docker.internal:5521/",
     "authEnvVar": "NANOCLAW_GATEWAY_TOKEN"
   },
   "ltag-server": {
